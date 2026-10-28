@@ -117,3 +117,16 @@ test("one-shot RPC connections are separate from the persistent subscription", a
   subscription!.write(JSON.stringify({ event: "workspace_renamed", data: { workspace_id: "w1", label: "Still live" } }) + "\n")
   expect((await received).data.label).toBe("Still live")
 })
+
+test("reads OpenCode sessions reported by Herdr panes and skips other agents", async () => {
+  const f = await fixture((request, socket) => {
+    expect(request).toMatchObject({ method: "pane.list", params: {} })
+    socket.end(JSON.stringify({ id: request.id, result: { type: "pane_list", panes: [
+      { pane_id: "w1:p1", workspace_id: "w1", cwd: "/repo",
+        agent_session: { agent: "opencode", kind: "id", source: "herdr:opencode", value: "ses_1" } },
+      { pane_id: "w2:p1", workspace_id: "w2", agent_session: { agent: "claude", kind: "id", value: "x" } },
+      { pane_id: "w3:p1", workspace_id: "w3" },
+    ] } }) + "\n")
+  })
+  expect(await f.client.panes()).toEqual([{ workspace_id: "w1", session_id: "ses_1", cwd: "/repo" }])
+})

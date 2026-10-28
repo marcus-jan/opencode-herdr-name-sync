@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, basename } from "node:path"
 import { NameSync, meaningful, type Session, type Link } from "../src/sync"
-import type { Workspace } from "../src/herdr"
+import type { PaneSession, Workspace } from "../src/herdr"
 
 const directories: string[] = []
 afterEach(async () => {
@@ -16,6 +16,8 @@ async function fixture() {
   const sessions: Session[] = [{ id: "s1", title: "Project", location: { directory } }]
   const workspaces: Workspace[] = [{ workspace_id: "w1", label: "Project",
     worktree: { checkout_path: directory, is_linked_worktree: false } }]
+  const panes: PaneSession[] = []
+  const unlinked = new Set<string>()
   const writes: string[][] = []
   let saved: Link | false | undefined
   const deps = {
@@ -31,6 +33,9 @@ async function fixture() {
       sessions.find((session) => session.id === id)!.title = title
     },
     workspaces: async () => workspaces,
+    panes: async () => panes,
+    isUnlinked: async (id: string) => unlinked.has(id),
+    setUnlinked: async (id: string, value: boolean) => { if (value) unlinked.add(id); else unlinked.delete(id) },
     renameWorkspace: async (id: string, title: string) => {
       writes.push(["workspace", id, title])
       workspaces.find((workspace) => workspace.workspace_id === id)!.label = title
@@ -38,7 +43,7 @@ async function fixture() {
     load: async () => saved,
     save: async (link: Link | false | undefined) => { saved = link },
   }
-  return { directory, sessions, workspaces, writes, deps, sync: new NameSync(deps), saved: () => saved }
+  return { directory, sessions, workspaces, panes, writes, deps, sync: new NameSync(deps), saved: () => saved }
 }
 
 describe("name synchronization", () => {
@@ -131,7 +136,7 @@ describe("name synchronization", () => {
   test("duplicate workspaces and generic workspaces require an explicit workspace ID", async () => {
     const f = await fixture()
     f.workspaces.push({ ...f.workspaces[0]!, workspace_id: "w2" })
-    await expect(f.sync.bind("s1", "session")).rejects.toThrow("exactly one")
+    await expect(f.sync.bind("s1", "session")).rejects.toThrow("Could not tell")
     f.workspaces.splice(1)
     delete f.workspaces[0]!.worktree
     await f.sync.sessionRenamed("s1")
@@ -155,7 +160,7 @@ describe("name synchronization", () => {
     expect(f.sessions[0]!.title).toBe("Workspace edit")
     await restarted.bind("s1", "session")
     expect(f.saved()).toMatchObject({ explicitWorkspace: true })
-    await restarted.unlink()
+    await restarted.unlink("s1")
     f.sessions[0]!.title = "Unlinked edit"
     await restarted.sessionRenamed("s1")
     expect(f.workspaces[0]!.label).toBe("Workspace edit")
@@ -248,7 +253,7 @@ describe("name synchronization", () => {
   test("unlink is durable and explicit linking enables synchronization again", async () => {
     const f = await fixture()
     await f.sync.reconcile()
-    await f.sync.unlink()
+    await f.sync.unlink("s1")
     const restarted = new NameSync(f.deps)
     await restarted.reconcile()
     f.sessions[0]!.title = "Ignored"
@@ -311,6 +316,83 @@ describe("name synchronization", () => {
     fail = false
     await sync.sessionRenamed("s1")
     expect(f.workspaces[0]!.label).toBe("Retry me")
+  })
+
+  test("Herdr-reported sessions link any workspace and the custom label wins first", async () => {
+    const f = await fixture()
+    delete f.workspaces[0]!.worktree
+    f.workspaces[0]!.label = "Misc"
+    f.sessions[0]!.title = "Generated title"
+    f.panes.push({ workspace_id: "w1", session_id: "s1" })
+    await f.sync.reconcile()
+    expect(f.writes).toEqual([["session", "s1", "Misc"]])
+    await f.sync.sessionRenamed("s1")
+    expect(f.writes.length).toBe(1)
+    f.sessions[0]!.title = "Session edit"
+    await f.sync.sessionRenamed("s1")
+    expect(f.workspaces[0]!.label).toBe("Session edit")
+    f.workspaces[0]!.label = "Herdr edit"
+    await f.sync.workspaceRenamed("w1", "Herdr edit")
+    expect(f.sessions[0]!.title).toBe("Herdr edit")
+    expect(f.saved()).toBeUndefined()
+  })
+
+  test("a reported session waits for a real title and replaces a default directory label", async () => {
+    const f = await fixture()
+    f.workspaces[0]!.label = basename(f.directory)
+    f.sessions[0]!.title = "New session - 2026-10-28T12:00:00Z"
+    f.panes.push({ workspace_id: "w1", session_id: "s1" })
+    await f.sync.reconcile()
+    expect(f.writes).toEqual([])
+    f.sessions[0]!.title = "Implement feature"
+    await f.sync.sessionRenamed("s1")
+    expect(f.writes).toEqual([["workspace", "w1", "Implement feature"]])
+  })
+
+  test("many sessions in one checkout each sync with the workspace that runs them", async () => {
+    const f = await fixture()
+    f.sessions.push({ id: "s2", title: "Second", location: { directory: f.directory } })
+    f.workspaces.push({ ...f.workspaces[0]!, workspace_id: "w2", label: "Second" })
+    f.panes.push({ workspace_id: "w1", session_id: "s1" }, { workspace_id: "w2", session_id: "s2" },
+      { workspace_id: "w3", session_id: "elsewhere" })
+    await f.sync.reconcile()
+    f.sessions[1]!.title = "Second edit"
+    await f.sync.sessionRenamed("s2")
+    f.workspaces[0]!.label = "First edit"
+    await f.sync.workspaceRenamed("w1", "First edit")
+    expect(f.writes).toEqual([["workspace", "w2", "Second edit"], ["session", "s1", "First edit"]])
+  })
+
+  test("ambiguous pane reports and unlinked sessions are never synced", async () => {
+    const f = await fixture()
+    f.sessions.push({ id: "s2", title: "Other", location: { directory: f.directory } })
+    f.panes.push({ workspace_id: "w1", session_id: "s1" }, { workspace_id: "w1", session_id: "s2" })
+    await f.sync.reconcile()
+    f.sessions[0]!.title = "Edit"
+    await f.sync.sessionRenamed("s1")
+    expect(f.writes).toEqual([])
+    f.panes.splice(1)
+    await f.sync.unlink("s1")
+    const restarted = new NameSync(f.deps)
+    await restarted.sessionRenamed("s1")
+    expect(f.writes).toEqual([])
+    await restarted.bind("s1", "session")
+    expect(f.workspaces[0]!.label).toBe("Edit")
+    f.sessions[0]!.title = "Relinked"
+    await restarted.sessionRenamed("s1")
+    expect(f.workspaces[0]!.label).toBe("Relinked")
+  })
+
+  test("a stored link yields when Herdr reports another session in that workspace", async () => {
+    const f = await fixture()
+    await f.sync.reconcile()
+    expect(f.saved()).toMatchObject({ sessionID: "s1" })
+    f.panes.push({ workspace_id: "w1", session_id: "elsewhere" })
+    f.sessions[0]!.title = "Not mine"
+    await f.sync.sessionRenamed("s1")
+    expect(f.saved()).toBeUndefined()
+    expect(f.writes).toEqual([])
+    await expect(f.sync.bind("s1", "session", "w1")).rejects.toThrow("different OpenCode session")
   })
 
   test("meaningful titles retain exact spelling but reject empty/default names", () => {

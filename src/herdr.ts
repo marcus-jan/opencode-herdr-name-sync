@@ -6,6 +6,13 @@ export interface Workspace {
   worktree?: { checkout_path: string; is_linked_worktree: boolean }
 }
 
+// A pane in which Herdr's own OpenCode integration reports the root session.
+export interface PaneSession {
+  workspace_id: string
+  session_id: string
+  cwd?: string
+}
+
 export interface HerdrEvent {
   event: string
   data: { workspace_id?: string; label?: string }
@@ -98,6 +105,18 @@ export class HerdrClient {
     return result.workspaces.filter((item: any) =>
       typeof item?.workspace_id === "string" && typeof item?.label === "string" &&
       (!item.worktree || typeof item.worktree.checkout_path === "string"))
+  }
+
+  async panes(): Promise<PaneSession[]> {
+    const result = await this.exchange("pane.list", {}) as { panes?: unknown }
+    if (!Array.isArray(result?.panes)) throw new Error("Invalid Herdr pane list")
+    return result.panes.flatMap((item: any) => {
+      const session = item?.agent_session
+      if (typeof item?.workspace_id !== "string" || session?.agent !== "opencode" ||
+        session.kind !== "id" || typeof session.value !== "string" || !session.value) return []
+      return [{ workspace_id: item.workspace_id, session_id: session.value,
+        ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}) }]
+    })
   }
 
   async rename(workspaceID: string, label: string): Promise<void> {

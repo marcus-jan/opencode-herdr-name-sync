@@ -31,6 +31,7 @@ export default Plugin.define({
       getSession: (sessionID) => ctx.session.get({ sessionID }),
       renameSession: (sessionID, title) => ctx.session.update({ sessionID, title }),
       workspaces: () => herdr.list(),
+      panes: () => herdr.panes(),
       renameWorkspace: (workspaceID, title) => herdr.rename(workspaceID, title),
       async load() {
         const saved = await ctx.storage.get(key)
@@ -41,6 +42,9 @@ export default Plugin.define({
           typeof record.directory === "string" &&
           (record.explicitWorkspace === undefined || typeof record.explicitWorkspace === "boolean")) return saved as unknown as Link
       },
+      isUnlinked: async (sessionID) => await ctx.storage.get(`unlinked/${sessionID}`) === true,
+      setUnlinked: (sessionID, value) => value ? ctx.storage.set(`unlinked/${sessionID}`, true) :
+        ctx.storage.remove(`unlinked/${sessionID}`),
       save: (link) => link === false ? ctx.storage.set(key, false) :
         link ? ctx.storage.set(key, { ...link }) : ctx.storage.remove(key),
     })
@@ -67,7 +71,7 @@ export default Plugin.define({
       for (const source of ["session", "workspace"] as const) {
         editor.add({
           name: `herdr-link-${source}`,
-          description: `Link this session, keeping the ${source} name (optional: workspace ID for any Herdr space)`,
+          description: `Link this session, keeping the ${source} name (optional: Herdr workspace ID)`,
           execute: ({ sessionID, prompt }) => enqueue(() => {
             const text = prompt.text.trim()
             if (text && /\s/.test(text)) throw new Error("Pass a single Herdr workspace ID, for example: w36")
@@ -77,8 +81,8 @@ export default Plugin.define({
       }
       editor.add({
         name: "herdr-unlink",
-        description: "Unlink and disable automatic linking until an explicit link command",
-        execute: () => enqueue(() => sync.unlink()),
+        description: "Stop syncing this session until an explicit link command",
+        execute: ({ sessionID }) => enqueue(() => sync.unlink(sessionID)),
       })
     })
     void (async () => {

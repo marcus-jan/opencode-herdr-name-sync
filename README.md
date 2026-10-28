@@ -6,22 +6,22 @@ branch or checkout directory.
 
 ## Status
 
-Early release, with Bun tests and a read-only smoke check against Herdr protocol
-20. Version 0.1.0 was also successfully tested live locally. Version 0.2.0 adds
-explicit linking for non-Git spaces; that new path has automated coverage but
-still needs a live check. Releases are distributed through GitHub, not npm.
+Early release with Bun tests. Version 0.3.0 links workspaces using the OpenCode
+session that Herdr (0.9+) reports for each pane, so any workspace works, Git or
+not, with no command needed. Releases are distributed through GitHub, not npm.
 
 ## Install
 
 Install the tagged GitHub release globally in OpenCode:
 
 ```sh
-opencode plugin add 'github:marcus-jan/opencode-herdr-name-sync#v0.2.0'
+opencode plugin add 'github:marcus-jan/opencode-herdr-name-sync#v0.3.0'
 ```
 
 This adds the package to `~/.config/opencode/opencode.json(c)`. Herdr must be
-running. Git metadata is required only for automatic workspace matching; explicit
-workspace-ID linking also supports regular/non-Git spaces such as **Misc**.
+running. With Herdr 0.9+ and its OpenCode integration (installed by Herdr in
+`~/.config/opencode/plugins/herdr-agent-state.js`), every workspace that runs an
+OpenCode session is linked automatically, including regular spaces such as **Misc**.
 
 ## Use locally
 
@@ -59,7 +59,7 @@ In the session you want to link, use one of these slash commands:
 | --- | --- |
 | `/herdr-link-session [workspace-ID]` | Keep this session's title; rename the workspace. |
 | `/herdr-link-workspace [workspace-ID]` | Keep the workspace label; rename this session. |
-| `/herdr-unlink` | Stop syncing and automatic linking for this directory until an explicit link command. |
+| `/herdr-unlink` | Stop syncing this session (durably) until an explicit link command. |
 
 Explicit linking can transfer ownership from another top-level session. Only
 future changes to the chosen owner sync. Links and the unlinked state persist in
@@ -83,13 +83,23 @@ link commands can omit the ID afterward, including after reload. The owner must
 remain a top-level session in its original directory. Closing the workspace or
 moving/deleting the owner invalidates the link. `/herdr-unlink` still stops sync.
 
-Ownership is stored per OpenCode location directory, not per terminal pane. Do
-not independently link sessions from different directories to the same Herdr
-space: those plugin instances do not arbitrate a shared owner. Sessions in the
-same directory share one selected owner/space, even if open in different panes.
+Stored (explicit or path-matched) links are kept per OpenCode location
+directory. Herdr-reported pairings take precedence: a stored link is dropped when
+Herdr reports a different session in its workspace or its session in another one.
 
 ### Automatic behavior
 
+- **Herdr-reported sessions (primary):** Herdr's OpenCode integration reports the
+  root session running in each pane. A workspace whose panes report exactly one
+  OpenCode session is paired with it, in any directory. On first pairing, the
+  workspace label wins and is copied to the session, unless the label is still a
+  default directory name, in which case the session title wins. Pairing waits
+  until the session has a real (non-placeholder) title. Workspaces reporting
+  several sessions, and sessions open in several workspaces, are skipped; use an
+  explicit link command for those. Many sessions in one checkout can each pair
+  with their own workspace. Pairings are re-read every five seconds and on each
+  rename.
+- **Fallbacks (older Herdr or no report):** the stored/path-matching rules below.
 - **Startup:** link automatically only when exactly one top-level session and one
   eligible workspace exist, and their meaningful names already match. Do not
   overwrite differing names, even when restoring a saved link.
@@ -111,7 +121,7 @@ same directory share one selected owner/space, even if open in different panes.
 
 ## Matching and safety
 
-Automatic matching requires an exact canonical filesystem-path match between the session's
+Fallback path matching requires an exact canonical filesystem-path match between the session's
 `location.directory` and Herdr's `worktree.checkout_path`. Symlinks are resolved;
 prefix/subdirectory matches are deliberately not supported. Both ordinary Git
 checkouts (`is_linked_worktree: false`) and linked worktrees are eligible.

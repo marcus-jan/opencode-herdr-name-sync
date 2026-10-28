@@ -26,6 +26,7 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
       methods.push(request.method)
       if (request.method === "workspace.rename") workspace.label = request.params.label
       const result = request.method === "workspace.list" ? { workspaces: [workspace] } :
+        request.method === "pane.list" ? { panes: [] } :
         { type: request.method === "events.subscribe" ? "subscription_started" : "workspace_renamed" }
       const response = JSON.stringify({ id: request.id, result }) + "\n"
       if (request.method === "events.subscribe") socket.write(response)
