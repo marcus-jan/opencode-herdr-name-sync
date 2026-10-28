@@ -38,7 +38,8 @@ export default Plugin.define({
         const record = saved as Record<string, unknown> | undefined
         if (saved && typeof saved === "object" && !Array.isArray(saved) &&
           typeof record?.sessionID === "string" && typeof record.workspaceID === "string" &&
-          typeof record.directory === "string") return saved as unknown as Link
+          typeof record.directory === "string" &&
+          (record.explicitWorkspace === undefined || typeof record.explicitWorkspace === "boolean")) return saved as unknown as Link
       },
       save: (link) => link === false ? ctx.storage.set(key, false) :
         link ? ctx.storage.set(key, { ...link }) : ctx.storage.remove(key),
@@ -66,8 +67,12 @@ export default Plugin.define({
       for (const source of ["session", "workspace"] as const) {
         editor.add({
           name: `herdr-link-${source}`,
-          description: `Link this session to its Herdr workspace, keeping the ${source} name`,
-          execute: ({ sessionID }) => enqueue(() => sync.bind(sessionID, source)),
+          description: `Link this session, keeping the ${source} name (optional: workspace ID for any Herdr space)`,
+          execute: ({ sessionID, prompt }) => enqueue(() => {
+            const text = prompt.text.trim()
+            if (text && /\s/.test(text)) throw new Error("Pass a single Herdr workspace ID, for example: w36")
+            return sync.bind(sessionID, source, text || undefined)
+          }),
         })
       }
       editor.add({

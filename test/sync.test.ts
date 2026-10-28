@@ -128,7 +128,7 @@ describe("name synchronization", () => {
     expect(f.saved()).toBeUndefined()
   })
 
-  test("duplicate workspaces and generic workspaces cannot be renamed", async () => {
+  test("duplicate workspaces and generic workspaces require an explicit workspace ID", async () => {
     const f = await fixture()
     f.workspaces.push({ ...f.workspaces[0]!, workspace_id: "w2" })
     await expect(f.sync.bind("s1", "session")).rejects.toThrow("exactly one")
@@ -136,6 +136,84 @@ describe("name synchronization", () => {
     delete f.workspaces[0]!.worktree
     await f.sync.sessionRenamed("s1")
     expect(f.writes).toEqual([])
+  })
+
+  test("explicit selection links a non-Git space and syncs both directions after reload", async () => {
+    const f = await fixture()
+    delete f.workspaces[0]!.worktree
+    f.workspaces[0]!.label = "Misc"
+    await f.sync.bind("s1", "workspace", "w1")
+    expect(f.sessions[0]!.title).toBe("Misc")
+    expect(f.saved()).toMatchObject({ explicitWorkspace: true, workspaceID: "w1" })
+    const restarted = new NameSync(f.deps)
+    await restarted.reconcile()
+    f.sessions[0]!.title = "Organize notes"
+    await restarted.sessionRenamed("s1")
+    expect(f.workspaces[0]!.label).toBe("Organize notes")
+    f.workspaces[0]!.label = "Workspace edit"
+    await restarted.workspaceRenamed("w1", "Workspace edit")
+    expect(f.sessions[0]!.title).toBe("Workspace edit")
+    await restarted.bind("s1", "session")
+    expect(f.saved()).toMatchObject({ explicitWorkspace: true })
+    await restarted.unlink()
+    f.sessions[0]!.title = "Unlinked edit"
+    await restarted.sessionRenamed("s1")
+    expect(f.workspaces[0]!.label).toBe("Workspace edit")
+  })
+
+  test("explicit IDs resolve duplicate paths and may target a space with unrelated Git metadata", async () => {
+    const f = await fixture()
+    f.workspaces.push({ ...f.workspaces[0]!, workspace_id: "w2", label: "Other" })
+    await f.sync.bind("s1", "session", "w2")
+    expect(f.writes).toEqual([["workspace", "w2", "Project"]])
+    f.workspaces[1]!.worktree = { checkout_path: "/unrelated", is_linked_worktree: false }
+    f.sessions[0]!.title = "Selected only"
+    await f.sync.sessionRenamed("s1")
+    expect(f.workspaces[1]!.label).toBe("Selected only")
+    expect(f.workspaces[0]!.label).toBe("Project")
+  })
+
+  test("invalid explicit IDs and children cannot replace an existing link", async () => {
+    const f = await fixture()
+    await f.sync.reconcile()
+    const saved = f.saved()
+    await expect(f.sync.bind("s1", "session", "missing")).rejects.toThrow("not found")
+    f.sessions.push({ id: "child", parentID: "s1", title: "Child", location: { directory: f.directory } })
+    await expect(f.sync.bind("child", "session", "w1")).rejects.toThrow("top-level")
+    expect(f.saved()).toEqual(saved)
+    expect(f.writes).toEqual([])
+  })
+
+  test("explicit links expire on closure, moves or deletion without auto-linking a generic space", async () => {
+    for (const change of ["closure", "move", "deletion"] as const) {
+      const f = await fixture()
+      delete f.workspaces[0]!.worktree
+      await f.sync.bind("s1", "workspace", "w1")
+      if (change === "closure") f.workspaces.splice(0)
+      if (change === "move") f.sessions[0]!.location.directory = "/"
+      if (change === "deletion") f.sessions.splice(0)
+      f.sessions.push({ id: "s2", title: "Project", location: { directory: f.directory } })
+      await f.sync.reconcile()
+      expect(f.saved()).toBeUndefined()
+      await f.sync.sessionRenamed("s2")
+      expect(f.writes).toEqual([])
+    }
+  })
+
+  test("an explicit non-Git link still ignores startup conflicts and competing sessions", async () => {
+    const f = await fixture()
+    delete f.workspaces[0]!.worktree
+    await f.sync.bind("s1", "session", "w1")
+    f.workspaces[0]!.label = "Offline edit"
+    f.sessions.push({ id: "s2", title: "Other", location: { directory: f.directory } })
+    const restarted = new NameSync(f.deps)
+    await restarted.reconcile(true)
+    await restarted.workspaceRenamed("w1", "Offline edit")
+    await restarted.sessionRenamed("s2")
+    expect(f.writes).toEqual([])
+    f.sessions[0]!.title = "Owner edit"
+    await restarted.sessionRenamed("s1")
+    expect(f.workspaces[0]!.label).toBe("Owner edit")
   })
 
   test("moving or deleting the owner invalidates the link", async () => {

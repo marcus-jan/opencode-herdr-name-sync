@@ -13,6 +13,7 @@ export interface Link {
   sessionID: string
   workspaceID: string
   directory: string
+  explicitWorkspace?: boolean
 }
 
 export interface SyncDependencies {
@@ -68,23 +69,28 @@ export class NameSync {
       this.link = saved || undefined
       this.loaded = true
     }
-    // Two Herdr workspaces for the same checkout cannot be distinguished by
-    // directory. Do not guess, even if a stale saved workspace ID still exists.
-    const workspace = matches.length === 1 ? matches[0] : undefined
+    // Explicit selection does not require Git metadata. Without it, duplicate
+    // checkout paths are ambiguous and must never be guessed from environment.
+    let workspace = this.link?.explicitWorkspace ?
+      workspaces.find((item) => item.workspace_id === this.link!.workspaceID) :
+      matches.length === 1 ? matches[0] : undefined
     const owner = roots.find((session) => session.id === this.link?.sessionID)
     if (this.link && (!workspace || !owner || this.link.directory !== directory ||
       this.link.workspaceID !== workspace.workspace_id)) {
       await this.deps.save(undefined)
       this.link = undefined
+      workspace = matches.length === 1 ? matches[0] : undefined
     }
     if (this.stopped) return
-    return { directory, roots, workspace }
+    return { directory, roots, workspace, workspaces }
   }
 
-  private async remember(session: Session, workspace: Workspace, directory: string) {
-    const link = { sessionID: session.id, workspaceID: workspace.workspace_id, directory }
+  private async remember(session: Session, workspace: Workspace, directory: string, explicitWorkspace = false) {
+    const link: Link = { sessionID: session.id, workspaceID: workspace.workspace_id, directory,
+      ...(explicitWorkspace ? { explicitWorkspace: true } : {}) }
     await this.deps.save(link)
     this.link = link
+    this.sessionEcho = undefined
     this.autoLink = true
     this.workspaceLabels.set(workspace.workspace_id, workspace.label)
   }
@@ -141,19 +147,26 @@ export class NameSync {
     }
   }
 
-  async bind(sessionID: string, source: "session" | "workspace") {
+  async bind(sessionID: string, source: "session" | "workspace", workspaceID?: string) {
     const state = await this.snapshot()
-    if (!state?.workspace) throw new Error("Expected exactly one Herdr Git workspace for this session directory")
+    if (!state) return
+    const workspace = workspaceID ? state.workspaces.find((item) => item.workspace_id === workspaceID) : state.workspace
+    if (!workspace) throw new Error(workspaceID ? `Herdr workspace not found: ${workspaceID}` :
+      "Expected exactly one Herdr Git workspace for this session directory. " +
+      "Pass a workspace ID to link any space, including non-Git spaces. Available: " +
+      state.workspaces.map((item) => `${item.workspace_id} (${item.label})`).join(", "))
     const session = state.roots.find((item) => item.id === sessionID)
-    if (!session) throw new Error("Only a top-level session in this checkout can own its workspace")
-    const title = source === "session" ? session.title : state.workspace.label
+    if (!session) throw new Error("Only a top-level session in this directory can own its workspace")
+    const title = source === "session" ? session.title : workspace.label
     if (!meaningful(title)) throw new Error("Choose a meaningful title before linking")
     // Ownership is explicit here: this command may replace a previous owner.
-    await this.remember(session, state.workspace, state.directory)
+    const explicit = workspaceID !== undefined ||
+      (this.link?.explicitWorkspace === true && this.link.workspaceID === workspace.workspace_id)
+    await this.remember(session, workspace, state.directory, explicit)
     if (this.stopped) return
-    if (source === "session" && state.workspace.label !== title) {
-      await this.deps.renameWorkspace(state.workspace.workspace_id, title)
-      this.workspaceLabels.set(state.workspace.workspace_id, title)
+    if (source === "session" && workspace.label !== title) {
+      await this.deps.renameWorkspace(workspace.workspace_id, title)
+      this.workspaceLabels.set(workspace.workspace_id, title)
     } else if (source === "workspace" && session.title !== title) {
       await this.deps.renameSession(session.id, title)
       this.sessionEcho = title

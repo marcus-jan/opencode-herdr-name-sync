@@ -6,20 +6,22 @@ branch or checkout directory.
 
 ## Status
 
-Initial implementation, with Bun tests and a read-only smoke check against Herdr
-protocol 20. Releases are distributed through GitHub, not npm. A live end-to-end
-rename test is still needed before treating this as production-ready.
+Early release, with Bun tests and a read-only smoke check against Herdr protocol
+20. Version 0.1.0 was also successfully tested live locally. Version 0.2.0 adds
+explicit linking for non-Git spaces; that new path has automated coverage but
+still needs a live check. Releases are distributed through GitHub, not npm.
 
 ## Install
 
 Install the tagged GitHub release globally in OpenCode:
 
 ```sh
-opencode plugin add 'github:marcus-jan/opencode-herdr-name-sync#v0.1.0'
+opencode plugin add 'github:marcus-jan/opencode-herdr-name-sync#v0.2.0'
 ```
 
 This adds the package to `~/.config/opencode/opencode.json(c)`. Herdr must be
-running, and the workspace must expose the Git metadata described below.
+running. Git metadata is required only for automatic workspace matching; explicit
+workspace-ID linking also supports regular/non-Git spaces such as **Misc**.
 
 ## Use locally
 
@@ -55,13 +57,36 @@ In the session you want to link, use one of these slash commands:
 
 | Command | Initial conflict resolution |
 | --- | --- |
-| `/herdr-link-session` | Keep this session's title; rename the workspace. |
-| `/herdr-link-workspace` | Keep the workspace label; rename this session. |
+| `/herdr-link-session [workspace-ID]` | Keep this session's title; rename the workspace. |
+| `/herdr-link-workspace [workspace-ID]` | Keep the workspace label; rename this session. |
 | `/herdr-unlink` | Stop syncing and automatic linking for this directory until an explicit link command. |
 
 Explicit linking can transfer ownership from another top-level session. Only
 future changes to the chosen owner sync. Links and the unlinked state persist in
 OpenCode's plugin storage. Commands report invalid or ambiguous matches as errors.
+
+### Regular spaces, including Misc (no Git required)
+
+Find the intended space's ID with `herdr workspace list`, then pass that ID:
+
+```text
+/herdr-link-workspace w36
+```
+
+This keeps that space's current label and gives it to the current session. Use
+`/herdr-link-session w36` instead to keep the session title. `w36` is an example;
+choose the ID of the actual space you want to rename, not its label.
+
+An explicit ID bypasses Git/path matching and resolves duplicate-checkout
+ambiguity. The selection is saved, so future edits sync in both directions and
+link commands can omit the ID afterward, including after reload. The owner must
+remain a top-level session in its original directory. Closing the workspace or
+moving/deleting the owner invalidates the link. `/herdr-unlink` still stops sync.
+
+Ownership is stored per OpenCode location directory, not per terminal pane. Do
+not independently link sessions from different directories to the same Herdr
+space: those plugin instances do not arbitrate a shared owner. Sessions in the
+same directory share one selected owner/space, even if open in different panes.
 
 ### Automatic behavior
 
@@ -86,18 +111,20 @@ OpenCode's plugin storage. Commands report invalid or ambiguous matches as error
 
 ## Matching and safety
 
-Matching requires an exact canonical filesystem-path match between the session's
+Automatic matching requires an exact canonical filesystem-path match between the session's
 `location.directory` and Herdr's `worktree.checkout_path`. Symlinks are resolved;
 prefix/subdirectory matches are deliberately not supported. Both ordinary Git
 checkouts (`is_linked_worktree: false`) and linked worktrees are eligible.
 
-Workspaces without Herdr Git metadata are ignored, as are duplicate workspaces
-pointing to the same checkout. The plugin does **not** fall back to the server's
+Without explicit workspace-ID linking, workspaces without Herdr Git metadata are
+ignored, as are duplicate workspaces pointing to the same checkout. The plugin
+does **not** fall back to the server's
 inherited `HERDR_WORKSPACE_ID`: a shared OpenCode server can serve many unrelated
 workspaces. Each plugin instance is scoped to its own location directory.
 
-Herdr currently reports no Git metadata for the freshly created development
-workspace, so it is intentionally ineligible until Herdr recognizes the checkout.
+The explicit workspace-ID selection is deliberate user input, not a guess based
+on a label, focus, or server environment. It works even when Herdr has no Git
+metadata for a space or its checkout path differs from the session directory.
 
 Both directions are serialized, use current API state, and suppress echoed or
 stale events. Herdr may emit existing rename notifications on subscription;
@@ -139,8 +166,10 @@ does not yet expose the event-type filter described by the current V2 docs.
    transfer ownership to the second top-level session.
 7. Run `/herdr-unlink`; confirm renames stop, including after `/reload`.
 8. Re-link, restart Herdr, and check that subscription reconnects without
-   overwriting differing names. Move/delete the owner and confirm it cannot rename
-   its former workspace.
+    overwriting differing names. Move/delete the owner and confirm it cannot rename
+    its former workspace.
+9. In a regular/non-Git space, use `/herdr-link-workspace <workspace-ID>`. Confirm
+   both rename directions work, survive `/reload`, and stop after `/herdr-unlink`.
 
 Inspect Herdr's installed contract with `herdr api schema --json`.
 OpenCode plugin documentation: <https://opencode.ai/v2/docs/build/plugins/server>.

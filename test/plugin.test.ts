@@ -35,7 +35,9 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
   let cleanup: (() => unknown) | undefined
   try {
     await new Promise<void>((resolve) => server.listen(path, resolve))
-    const commands = new Map<string, { execute(input: { sessionID: string }): Promise<void> }>()
+    type Invocation = { sessionID: string; prompt: { text: string } }
+    const input = (text = ""): Invocation => ({ sessionID: "s1", prompt: { text } })
+    const commands = new Map<string, { execute(input: Invocation): Promise<void> }>()
     const storage = new Map<string, unknown>()
     let linked!: () => void
     const ready = new Promise<void>((resolve) => { linked = resolve })
@@ -54,7 +56,7 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
         remove: async (key: string) => { storage.delete(key) },
       },
       command: { transform: async (edit: (editor: unknown) => void) => edit({
-        add: (command: { name: string; execute(input: { sessionID: string }): Promise<void> }) => commands.set(command.name, command),
+        add: (command: { name: string; execute(input: Invocation): Promise<void> }) => commands.set(command.name, command),
       }) },
       event: { async *subscribe({ signal }: { signal: AbortSignal }) {
         await new Promise<void>((resolve) => signal.addEventListener("abort", () => {
@@ -68,17 +70,29 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
     expect(commands.size).toBe(3)
     expect([...storage.values()][0]).toMatchObject({ sessionID: "s1", workspaceID: "w1" })
     workspace.label = "Workspace wins"
-    await commands.get("herdr-link-workspace")!.execute({ sessionID: "s1" })
+    await commands.get("herdr-link-workspace")!.execute(input())
     expect(session.title).toBe("Workspace wins")
     session.title = "Session wins"
-    await commands.get("herdr-link-session")!.execute({ sessionID: "s1" })
+    await commands.get("herdr-link-session")!.execute(input())
     expect(workspace.label).toBe("Session wins")
-    await commands.get("herdr-unlink")!.execute({ sessionID: "s1" })
+    await commands.get("herdr-unlink")!.execute(input())
     expect([...storage.values()][0]).toBe(false)
+    delete (workspace as { worktree?: unknown }).worktree
+    workspace.label = "Misc"
+    await expect(commands.get("herdr-link-workspace")!.execute(input("w1 extra"))).rejects.toThrow("single")
+    await expect(commands.get("herdr-link-workspace")!.execute(input("missing"))).rejects.toThrow("not found")
+    await commands.get("herdr-link-workspace")!.execute(input("  w1  "))
+    expect(session.title).toBe("Misc")
+    expect([...storage.values()][0]).toMatchObject({ workspaceID: "w1", explicitWorkspace: true })
+    cleanup()
+    cleanup = await plugin.setup(context) as () => unknown
+    session.title = "Non-Git session"
+    await commands.get("herdr-link-session")!.execute(input())
+    expect(workspace.label).toBe("Non-Git session")
     cleanup()
     expect(streamAborted).toBe(true)
     const count = methods.length
-    await commands.get("herdr-link-session")!.execute({ sessionID: "s1" })
+    await commands.get("herdr-link-session")!.execute(input())
     expect(methods.length).toBe(count)
   } finally {
     cleanup?.()
