@@ -1,0 +1,27 @@
+{
+  "name": "opencode-herdr-name-sync",
+  "version": "0.1.0",
+  "description": "Two-way name synchronization between OpenCode sessions and Herdr workspaces",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcus-jan/opencode-herdr-name-sync.git"
+  },
+  "homepage": "https://github.com/marcus-jan/opencode-herdr-name-sync#readme",
+  "bugs": { "url": "https://github.com/marcus-jan/opencode-herdr-name-sync/issues" },
+  "exports": { ".": "./index.ts" },
+  "files": ["index.ts", "src", "LICENSE", "README.md"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test",
+    "check": "bun run --bun typecheck && bun run test"
+  },
+  "engines": { "bun": ">=1.3.14", "node": ">=26.4.0" },
+  "dependencies": { "@opencode/plugin": "2.1.4" },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/bun": "^1.4.1",
+    "typescript": "^5.9.0"
+  }
+}
