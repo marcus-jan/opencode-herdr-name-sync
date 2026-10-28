@@ -52,8 +52,8 @@ const key = (pair: Pair) => `${pair.session.id}\n${pair.workspace.workspace_id}`
 // no-ops instead of changing a newer title back.
 //
 // Pairs come from two sources. Herdr's OpenCode integration reports which
-// root session runs in each pane, which works for any workspace. The stored
-// link (explicit command or Git checkout path match) is the fallback.
+// root session runs in each pane. The stored link (explicit command or Git
+// checkout path match) is the fallback. Only linked worktrees are eligible.
 export class NameSync {
   private link?: Link
   private loaded = false
@@ -77,9 +77,11 @@ export class NameSync {
     if (this.stopped) return
     const directory = await canonical(this.deps.directory)
     if (!directory) return
-    const [sessions, workspaces, panes] = await Promise.all([
+    const [sessions, all, panes] = await Promise.all([
       this.deps.sessions(), this.deps.workspaces(), this.deps.panes(),
     ])
+    // Main checkouts and non-Git spaces keep their own names.
+    const workspaces = all.filter((workspace) => workspace.worktree?.is_linked_worktree === true)
     const roots: Session[] = []
     for (const session of sessions) {
       if (!session.parentID && await canonical(session.location.directory) === directory) roots.push(session)
@@ -138,7 +140,7 @@ export class NameSync {
       !await this.isUnlinked(roots[0]!.id) ? { session: roots[0]!, workspace } : undefined
     const matched = matches.length === 1 ? matches[0] : undefined
     if (this.stopped) return
-    return { directory, roots, workspaces, pairs, candidate, matched, conflicts }
+    return { directory, roots, all, workspaces, pairs, candidate, matched, conflicts }
   }
 
   // Establish newly observed pairs. Reported pairs adopt the Herdr label,
@@ -248,9 +250,12 @@ export class NameSync {
     const reported = state.pairs.find((item) => item.reported && item.session.id === sessionID)?.workspace
     const workspace = workspaceID ? state.workspaces.find((item) => item.workspace_id === workspaceID) :
       reported ?? state.pairs.find((item) => item.session.id === sessionID)?.workspace ?? state.matched
+    const ineligible = workspaceID && state.all.find((item) => item.workspace_id === workspaceID)
+    if (!workspace && ineligible) throw new Error(
+      `Only linked Git worktree workspaces sync; ${workspaceID} (${ineligible.label}) is a main checkout or non-Git space`)
     if (!workspace) throw new Error(workspaceID ? `Herdr workspace not found: ${workspaceID}` :
       "Could not tell which Herdr workspace runs this session. " +
-      "Pass a workspace ID to link any space. Available: " +
+      "Pass a linked worktree workspace ID. Available: " +
       state.workspaces.map((item) => `${item.workspace_id} (${item.label})`).join(", "))
     const session = state.roots.find((item) => item.id === sessionID)
     if (!session) throw new Error("Only a top-level session in this directory can own its workspace")

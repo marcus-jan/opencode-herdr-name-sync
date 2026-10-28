@@ -78,7 +78,7 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
     expect(workspace.label).toBe("Session wins")
     await commands.get("herdr-unlink")!.execute(input())
     expect([...storage.values()][0]).toBe(false)
-    delete (workspace as { worktree?: unknown }).worktree
+    workspace.worktree!.checkout_path = "/elsewhere"
     workspace.label = "Misc"
     await expect(commands.get("herdr-link-workspace")!.execute(input("w1 extra"))).rejects.toThrow("single")
     await expect(commands.get("herdr-link-workspace")!.execute(input("missing"))).rejects.toThrow("not found")
@@ -87,9 +87,9 @@ test("plugin wires persistent ownership, commands and cleanup to the SDK context
     expect([...storage.values()][0]).toMatchObject({ workspaceID: "w1", explicitWorkspace: true })
     cleanup()
     cleanup = await plugin.setup(context) as () => unknown
-    session.title = "Non-Git session"
+    session.title = "Explicit session"
     await commands.get("herdr-link-session")!.execute(input())
-    expect(workspace.label).toBe("Non-Git session")
+    expect(workspace.label).toBe("Explicit session")
     cleanup()
     expect(streamAborted).toBe(true)
     const count = methods.length

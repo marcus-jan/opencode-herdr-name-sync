@@ -1,6 +1,6 @@
 {
   "name": "opencode-herdr-name-sync",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Two-way name synchronization between OpenCode sessions and Herdr workspaces",
   "type": "module",
   "license": "MIT",

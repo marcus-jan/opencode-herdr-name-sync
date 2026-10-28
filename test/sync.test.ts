@@ -15,7 +15,7 @@ async function fixture() {
   directories.push(directory)
   const sessions: Session[] = [{ id: "s1", title: "Project", location: { directory } }]
   const workspaces: Workspace[] = [{ workspace_id: "w1", label: "Project",
-    worktree: { checkout_path: directory, is_linked_worktree: false } }]
+    worktree: { checkout_path: directory, is_linked_worktree: true } }]
   const panes: PaneSession[] = []
   const unlinked = new Set<string>()
   const writes: string[][] = []
@@ -143,9 +143,39 @@ describe("name synchronization", () => {
     expect(f.writes).toEqual([])
   })
 
-  test("explicit selection links a non-Git space and syncs both directions after reload", async () => {
+  test("main checkouts and non-Git spaces are never synced, even when reported or requested", async () => {
+    for (const kind of ["main", "non-Git"] as const) {
+      const f = await fixture()
+      if (kind === "main") f.workspaces[0]!.worktree!.is_linked_worktree = false
+      else delete f.workspaces[0]!.worktree
+      f.workspaces[0]!.label = "Misc"
+      f.sessions[0]!.title = "Generated title"
+      f.panes.push({ workspace_id: "w1", session_id: "s1" })
+      await f.sync.reconcile()
+      f.sessions[0]!.title = "Session edit"
+      await f.sync.sessionRenamed("s1")
+      f.workspaces[0]!.label = "Herdr edit"
+      await f.sync.workspaceRenamed("w1", "Herdr edit")
+      await expect(f.sync.bind("s1", "session", "w1")).rejects.toThrow("Only linked Git worktree")
+      await expect(f.sync.bind("s1", "session")).rejects.toThrow("Could not tell")
+      expect(f.writes).toEqual([])
+      expect(f.saved()).toBeUndefined()
+    }
+  })
+
+  test("a stored link to a space that is no longer eligible is dropped", async () => {
     const f = await fixture()
-    delete f.workspaces[0]!.worktree
+    await f.sync.bind("s1", "session", "w1")
+    f.workspaces[0]!.worktree!.is_linked_worktree = false
+    f.sessions[0]!.title = "Ignored"
+    await f.sync.sessionRenamed("s1")
+    expect(f.saved()).toBeUndefined()
+    expect(f.writes).toEqual([])
+  })
+
+  test("explicit selection links a worktree by ID and syncs both directions after reload", async () => {
+    const f = await fixture()
+    f.workspaces[0]!.worktree!.checkout_path = "/elsewhere"
     f.workspaces[0]!.label = "Misc"
     await f.sync.bind("s1", "workspace", "w1")
     expect(f.sessions[0]!.title).toBe("Misc")
@@ -171,7 +201,7 @@ describe("name synchronization", () => {
     f.workspaces.push({ ...f.workspaces[0]!, workspace_id: "w2", label: "Other" })
     await f.sync.bind("s1", "session", "w2")
     expect(f.writes).toEqual([["workspace", "w2", "Project"]])
-    f.workspaces[1]!.worktree = { checkout_path: "/unrelated", is_linked_worktree: false }
+    f.workspaces[1]!.worktree = { checkout_path: "/unrelated", is_linked_worktree: true }
     f.sessions[0]!.title = "Selected only"
     await f.sync.sessionRenamed("s1")
     expect(f.workspaces[1]!.label).toBe("Selected only")
@@ -189,10 +219,10 @@ describe("name synchronization", () => {
     expect(f.writes).toEqual([])
   })
 
-  test("explicit links expire on closure, moves or deletion without auto-linking a generic space", async () => {
+  test("explicit links expire on closure, moves or deletion without auto-linking an unmatched space", async () => {
     for (const change of ["closure", "move", "deletion"] as const) {
       const f = await fixture()
-      delete f.workspaces[0]!.worktree
+      f.workspaces[0]!.worktree!.checkout_path = "/elsewhere"
       await f.sync.bind("s1", "workspace", "w1")
       if (change === "closure") f.workspaces.splice(0)
       if (change === "move") f.sessions[0]!.location.directory = "/"
@@ -205,9 +235,9 @@ describe("name synchronization", () => {
     }
   })
 
-  test("an explicit non-Git link still ignores startup conflicts and competing sessions", async () => {
+  test("an explicit link still ignores startup conflicts and competing sessions", async () => {
     const f = await fixture()
-    delete f.workspaces[0]!.worktree
+    f.workspaces[0]!.worktree!.checkout_path = "/elsewhere"
     await f.sync.bind("s1", "session", "w1")
     f.workspaces[0]!.label = "Offline edit"
     f.sessions.push({ id: "s2", title: "Other", location: { directory: f.directory } })
@@ -318,9 +348,9 @@ describe("name synchronization", () => {
     expect(f.workspaces[0]!.label).toBe("Retry me")
   })
 
-  test("Herdr-reported sessions link any workspace and the custom label wins first", async () => {
+  test("Herdr-reported sessions link a worktree in another directory and the custom label wins first", async () => {
     const f = await fixture()
-    delete f.workspaces[0]!.worktree
+    f.workspaces[0]!.worktree!.checkout_path = "/elsewhere"
     f.workspaces[0]!.label = "Misc"
     f.sessions[0]!.title = "Generated title"
     f.panes.push({ workspace_id: "w1", session_id: "s1" })
